@@ -67,6 +67,8 @@ put('premium/index.html', P.premiumPage()); put('login/index.html', P.loginPage(
 put('terms/index.html', P.termsPage()); put('privacy/index.html', P.privacyPage()); put('cookies/index.html', P.cookiesPage()); put('subscription-terms/index.html', P.subTermsPage()); put('responsible-gaming/index.html', P.responsiblePage());
 put('stats/index.html', `<!doctype html><meta http-equiv="refresh" content="0;url=${process.env.BASE || ''}/history/"><a href="${process.env.BASE || ''}/history/">Ιστορικό</a>`);
 put('events.json', JSON.stringify(P.eventsJson(all, nowTs)));
+const dayN = (rows, d) => rows.filter(r => r.date === d).length, st = (rows, d) => ({ total: rows.length, yesterday: dayN(rows, addDays(d, -1)), today: dayN(rows, d), tomorrow: dayN(rows, addDays(d, 1)), analysed: rows.filter(r => r.date === d && r.analysed).length });
+put('status/index.html', P.statusPage({ builtAt: nowTs, hasKey, supabase: supa.enabled(), fb: st(fb, today), bb: st(bk, today), winFb: state.meta.window, winBb: bb.meta.window, usage, picks: pub.length, errors: state.meta.log.filter(l => !l.ok).slice(0, 20) }));
 put('404.html', notFound());
 const base = SITE;
 const urls = ['/', '/football/', '/basketball/', '/history/', '/premium/', '/contact/', '/terms/', '/privacy/', '/cookies/', '/subscription-terms/', '/responsible-gaming/', '/football/leagues/', '/basketball/leagues/', ...[0, 1, 2].map(i => `/day/${addDays(today, i)}/`), ...[0, 1, 2].map(i => `/basketball/day/${addDays(today, i)}/`),
