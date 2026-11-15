@@ -28,21 +28,144 @@ export function saveBB() {
   for (const [f, t] of out) if (written.get(f) !== t) { fs.writeFileSync(path.join(DIR, f), t); written.set(f, t); }
   for (const f of [...written.keys()]) if (/^\d{4}-/.test(f) && !out.has(f)) { fs.rmSync(path.join(DIR, f), { force: true }); written.delete(f); }
 }
+
 export async function syncGames(date) {
-  const rows = await api('/games', { date, timezone: 'Europe/Athens' });
-  for (const g of rows) {
-    const ts = g.timestamp || Math.floor(Date.parse(g.date) / 1000), md = athensDate(new Date(ts * 1000));
-    const base = { game_id: g.id, tracked: tracked(g.league), match_date: md, kickoff_ts: ts, league_id: g.league.id, league_name: g.league.name, league_country: g.country?.name || '', league_logo: g.league.logo, season: g.league.season,
-      home_id: g.teams.home.id, home_name: g.teams.home.name, home_logo: g.teams.home.logo, away_id: g.teams.away.id, away_name: g.teams.away.name, away_logo: g.teams.away.logo,
-      status: g.status.short, score_home: g.scores?.home?.total ?? null, score_away: g.scores?.away?.total ?? null, updated_at: now() };
-    const old = bb.games.get(g.id); if (old) { Object.assign(old, base); continue; }
-    const taken = s => [...bb.games.values()].some(x => x.slug === s && x.game_id !== g.id);
-    let slug = slugify(`${base.home_name}-vs-${base.away_name}`) || `game-${g.id}`; const b = slug;
-    if (taken(slug)) slug = `${b}-${md}`; if (taken(slug)) slug = `${b}-${g.id}`;
-    bb.games.set(g.id, { ...base, slug, analysis: null, prediction: null, odds: null, enriched_at: null, tier: null });
+  const key = process.env.API_BASKETBALL_KEY;
+
+  if (!key) {
+    throw new Error('Missing API_BASKETBALL_KEY');
+  }
+
+  const url = new URL('https://live-basketball-api.com/api/v2/matches');
+  url.searchParams.set('api_key', key);
+  url.searchParams.set('date', date);
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Basketball API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (data.status !== 'ok' || !Array.isArray(data.matches)) {
+    throw new Error('Invalid basketball API response');
+  }
+
+  for (const g of data.matches) {
+    const competition = g.competition || {};
+    const league = {
+      id: competition.id,
+      name: competition.name || 'Basketball',
+      logo: competition.logo || competition.area?.flag || ''
+    };
+
+    const start = String(g.start_time || '').replace(' ', 'T') + 'Z';
+    const parsed = Date.parse(start);
+    const ts = Number.isFinite(parsed)
+      ? Math.floor(parsed / 1000)
+      : Math.floor(Date.now() / 1000);
+
+    const period = String(g.period || '').toLowerCase();
+    const rawStatus = String(g.status || '').toLowerCase();
+
+    let status = 'NS';
+
+    if (/finish|ended|complete/.test(rawStatus)) {
+      status = 'FT';
+    } else if (/cancel/.test(rawStatus)) {
+      status = 'CANC';
+    } else if (/abandon/.test(rawStatus)) {
+      status = 'ABD';
+    } else if (/postpon/.test(rawStatus)) {
+      status = 'PST';
+    } else if (/play|live|progress/.test(rawStatus)) {
+      if (period.includes('first')) status = 'Q1';
+      else if (period.includes('second')) status = 'Q2';
+      else if (period.includes('third')) status = 'Q3';
+      else if (period.includes('fourth')) status = 'Q4';
+      else if (period.includes('half')) status = 'HT';
+      else if (period.includes('overtime')) status = 'OT';
+      else status = 'Q1';
+    }
+
+    const scores = g.score?.final || [];
+
+    const base = {
+      game_id: g.id,
+      tracked: tracked(league),
+      match_date: date,
+      kickoff_ts: ts,
+      league_id: league.id,
+      league_name: league.name,
+      league_country: competition.area?.name || '',
+      league_logo: league.logo,
+      season: null,
+
+      home_id: g.team1?.id,
+      home_name: g.team1?.name || 'Team 1',
+      home_logo: g.team1?.logo || '',
+
+      away_id: g.team2?.id,
+      away_name: g.team2?.name || 'Team 2',
+      away_logo: g.team2?.logo || '',
+
+      status,
+      score_home: scores[0] ?? null,
+      score_away: scores[1] ?? null,
+      updated_at: now()
+    };
+
+    const old = bb.games.get(g.id);
+
+    if (old) {
+      Object.assign(old, base);
+      continue;
+    }
+
+    const taken = s =>
+      [...bb.games.values()].some(
+        x => x.slug === s && x.game_id !== g.id
+      );
+
+    let slug =
+      slugify(`${base.home_name}-vs-${base.away_name}`) ||
+      `game-${g.id}`;
+
+    const original = slug;
+
+    if (taken(slug)) slug = `${original}-${date}`;
+    if (taken(slug)) slug = `${original}-${g.id}`;
+
+    bb.games.set(g.id, {
+      ...base,
+      slug,
+      analysis: null,
+      prediction: null,
+      odds: null,
+      enriched_at: null,
+      tier: null
+    });
   }
 }
-export const refreshLeaguesBB = () => supa.cached('leagues:basketball', 7 * 86400, async () => (await api('/leagues')).map(x => { const l = x.league || x; return { id: l.id, name: l.name, type: l.type, logo: l.logo, country: x.country?.name || '', code: x.country?.code || '' }; }));
+
+export const refreshLeaguesBB = async () => {
+  const leagues = new Map();
+
+  for (const g of bb.games.values()) {
+    if (!g.league_id) continue;
+
+    leagues.set(g.league_id, {
+      id: g.league_id,
+      name: g.league_name,
+      type: 'Basketball',
+      logo: g.league_logo,
+      country: g.league_country || '',
+      code: ''
+    });
+  }
+
+  return [...leagues.values()];
+};
 
 // ---- μοντέλο (απλό, με ρητές παραδοχές: πλεονέκτημα έδρας +2 πόντοι, τυπική απόκλιση διαφοράς 11 και συνόλου 17 πόντοι)
 const Phi = x => { const t = 1 / (1 + 0.2316419 * Math.abs(x)), d = 0.3989423 * Math.exp(-x * x / 2), p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274)))); return x > 0 ? 1 - p : p; };
