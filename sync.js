@@ -1,4 +1,4 @@
-import { state, log } from './store.js';
+import { altTracked } from './apifootballcom.js';import { state, log } from './store.js';
 import { api } from './api.js';
 import { athensDate, addDays, slugify, FINISHED } from './util.js';
 import { buildAnalysis, parseRecent } from './analysis.js';
@@ -12,7 +12,10 @@ const PREMIUM_MIN = Number(process.env.PREMIUM_MIN_PCT || 68);
 // Εθνικές ομάδες: αναγνωρίζονται από το id ή από το όνομα της διοργάνωσης
 const NAT_IDS = [1, 4, 5, 6, 9, 10, 32, 34, 960];
 const NAT_RE = /(World Cup|Nations League|Friendlies|Euro Championship|Copa America|Africa Cup of Nations|Asian Cup|Gold Cup|Qualification|Qualifiers)/i, NAT_NO = /(Club|Women|U\d{2}|Youth|Olympic)/i;
-const isNational = l => !NAT_NO.test(l.name) && (NAT_IDS.includes(l.id) || (l.country === 'World' && NAT_RE.test(l.name)));
+const isNational = l =>
+  !NAT_NO.test(l.name || '') &&
+  l.country === 'World' &&
+  NAT_RE.test(l.name || '');
 const prio = m => m.national ? -1 : (i => i < 0 ? 999 : i)(LEAGUES.indexOf(m.league_id));
 const now = () => Math.floor(Date.now() / 1000);
 const list = () => [...state.matches.values()];
