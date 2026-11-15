@@ -245,16 +245,67 @@ registerSettler('basketball', async r => settleOne(r));
 export function settleBBLegacy() { // λειτουργία χωρίς Supabase
   for (const pk of Object.values(state.picks)) { if (pk.sport !== 'basketball' || pk.result) continue; const s = settleOne({ event_key: pk.key, pick_id: pk.pick_id }); if (s) { pk.result = s.result; pk.score = s.score; pk.settled_at = now(); } }
 }
+
 export async function runBasketball() {
-  const today = athensDate(), n = Number(process.env.DAYS_AHEAD || 1);
+  const today = athensDate();
+  const n = Number(process.env.DAYS_AHEAD || 1);
+
   if (bb.meta.lastDaily !== today) {
     let ok = false;
-    for (const d of [today, addDays(today, -1), ...Array.from({ length: n }, (_, i) => addDays(today, i + 1))]) { try { await syncGames(d); if (d === today) ok = true; } catch (e) { log('games-bb', false, `${d}: ${e.message}`); if (/QUOTA/.test(e.message)) break; } }
-    try { await refreshLeaguesBB(); } catch (e) { log('leagues-bb', false, e.message); }
-    if (ok) { bb.meta.lastDaily = today; log('daily', true, `Φορτώθηκαν παιχνίδια μπάσκετ ${today}`); }
-  } else { // ανανέωση αποτελεσμάτων μόνο αν υπάρχουν παιχνίδια σε εξέλιξη ή που έπρεπε να έχουν τελειώσει
-    const t = now(), pend = [...bb.games.values()].filter(g => !BB_OVER.includes(g.status) && g.kickoff_ts < t - 1800 && g.kickoff_ts > t - 6 * 3600);
-    if (pend.length && t - (bb.meta.lastRefresh || 0) > 1500) { bb.meta.lastRefresh = t; for (const d of new Set(pend.map(g => g.match_date))) try { await syncGames(d); } catch (e) { log('games-bb', false, e.message); } }
+
+    const dates = [
+      today,
+      addDays(today, -1),
+      ...Array.from({ length: n }, (_, i) =>
+        addDays(today, i + 1)
+      )
+    ];
+
+    for (const d of dates) {
+      try {
+        await syncGames(d);
+        if (d === today) ok = true;
+      } catch (e) {
+        log('games-bb', false, `${d}: ${e.message}`);
+      }
+    }
+
+    try {
+      await refreshLeaguesBB();
+    } catch (e) {
+      log('leagues-bb', false, e.message);
+    }
+
+    if (ok) {
+      bb.meta.lastDaily = today;
+      log('daily', true, `Φορτώθηκαν παιχνίδια μπάσκετ ${today}`);
+    }
+  } else {
+    const t = now();
+
+    const pend = [...bb.games.values()].filter(
+      g =>
+        !BB_OVER.includes(g.status) &&
+        g.kickoff_ts < t - 1800 &&
+        g.kickoff_ts > t - 6 * 3600
+    );
+
+    if (
+      pend.length &&
+      t - (bb.meta.lastRefresh || 0) > 1500
+    ) {
+      bb.meta.lastRefresh = t;
+
+      for (const d of new Set(pend.map(g => g.match_date))) {
+        try {
+          await syncGames(d);
+        } catch (e) {
+          log('games-bb', false, e.message);
+        }
+      }
+    }
   }
-  await enrichBB(today); if (process.env.ENRICH_TOMORROW === 'true') await enrichBB(addDays(today, 1));
+
+  // Προσωρινά απενεργοποιημένο το παλιό enrichment API-Sports.
 }
+
