@@ -1,14 +1,14 @@
 
 import { makeAltApi } from './apifootballcom.js';
 
-// Κοινή καταγραφή χρήσης API
 export const usage = {};
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// Διατηρούμε τον παλιό client για συμβατότητα με το μπάσκετ
+// Ξεχωριστό API key για κάθε υπηρεσία
 export function makeApi(name, base) {
   let last = 0;
+
   usage[name] = {
     limit: null,
     remaining: null,
@@ -18,12 +18,16 @@ export function makeApi(name, base) {
   };
 
   return async function api(endpoint, params = {}) {
-    const key = (name === 'basketball' && process.env.API_BASKETBALL_KEY)
-      || process.env.API_FOOTBALL_KEY;
+    const key = name === 'basketball'
+      ? process.env.API_BASKETBALL_KEY
+      : process.env.API_FOOTBALL_KEY;
 
-    if (!key) throw new Error('Λείπει το API key');
+    if (!key) {
+      throw new Error(`Λείπει το API key για ${name}`);
+    }
 
     const u = usage[name];
+
     if (u.remaining !== null && u.remaining <= 5) {
       throw new Error(`QUOTA: τέλος ημερήσιου ορίου (${name})`);
     }
@@ -32,21 +36,30 @@ export function makeApi(name, base) {
     if (wait > 0) await sleep(wait);
 
     const url = new URL(base + endpoint);
-    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) {
+        url.searchParams.set(k, String(v));
+      }
+    });
 
     const res = await fetch(url, {
-      headers: { 'x-apisports-key': key }
+      headers: {
+        'x-apisports-key': key
+      }
     });
 
     last = Date.now();
     u.calls++;
 
-    if (!res.ok) throw new Error(`API ${name} ${res.status} ${endpoint}`);
+    if (!res.ok) {
+      throw new Error(`API ${name} ${res.status} ${endpoint}`);
+    }
 
     const j = await res.json();
     return j.response || [];
   };
 }
 
-// ΝΕΟ API ΠΟΔΟΣΦΑΙΡΟΥ
+// Νέο Football API – δεν αλλάζει το basketball client
 export const api = makeAltApi(usage, 'football');
