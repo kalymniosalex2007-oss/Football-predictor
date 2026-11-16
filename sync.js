@@ -181,11 +181,8 @@ const splitInj = (m, l) =>
   };
 
 export async function enrichDay(date) {
-  const max = Number(process.env.MAX_ANALYSES_PER_DAY || 6);
-
-  // ΔΙΟΡΘΩΣΗ:
-  // Πρώτα φιλτράρουμε τους αγώνες που χρειάζονται ανάλυση
-  // και μετά επιλέγουμε τους πρώτους max αγώνες.
+  // ΧΩΡΙΣ ΗΜΕΡΗΣΙΟ ΟΡΙΟ ΑΝΑΛΥΣΕΩΝ.
+  // Επιλέγονται όλοι οι διαθέσιμοι αγώνες που χρειάζονται ανάλυση.
   const top = list()
     .filter(m =>
       m.match_date === date &&
@@ -197,8 +194,7 @@ export async function enrichDay(date) {
     .sort((a, b) =>
       prio(a) - prio(b) ||
       a.kickoff_ts - b.kickoff_ts
-    )
-    .slice(0, max);
+    );
 
   if (!top.length) return 0;
 
