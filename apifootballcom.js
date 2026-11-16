@@ -1,696 +1,612 @@
 
-import * as supa from './supa.js';
+const BASE = 'https://live-football-api.com/api/v1';
 
-const BASE = 'https://apiv3.apifootball.com/';
-const TZ = 'Europe/Athens';
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-const num = v =>
-  v === '' || v == null || !Number.isFinite(Number(v))
-    ? null
-    : Number(v);
-
-const idOf = v => Number.isFinite(Number(v)) ? Number(v) : v;
-
-const ymd = (d = new Date()) =>
-  new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(d);
-
-const addDays = (iso, n) => {
-  const d = new Date(iso + 'T12:00:00Z');
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
+const number = value => {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 };
 
-function offsetMs(ms) {
-  const f = new Intl.DateTimeFormat('en-US', {
-    timeZone: TZ,
-    hour12: false,
+const id = value => String(value ?? '');
+
+const TRACK = /(Premier League|Championship|La Liga|Primera Division|Bundesliga|Serie A|Serie B|Ligue 1|Ligue 2|Eredivisie|Primeira Liga|Liga Portugal|Super League|Super Lig|Scottish Premiership|Champions League|Europa League|Conference League|Europa Conference|FA Cup|EFL Cup|Copa del Rey|Coppa Italia|DFB Pokal|Coupe de France|World Cup|Nations League|Euro Championship|Copa America|Africa Cup|Asian Cup|Gold Cup|Greek Super League|Super League Greece|Belgian Pro League|MLS|Major League Soccer|Liga MX|Brasileirao|J League|A League)/i;
+
+export function altTracked(league) {
+  return TRACK.test(`${league?.name || ''} ${league?.country || ''}`);
+}
+
+function athensDate(timestamp) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Athens',
     year: 'numeric',
     month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  }).formatToParts(new Date(ms));
+    day: '2-digit'
+  }).formatToParts(new Date(timestamp * 1000));
 
-  const g = t => Number(f.find(p => p.type === t).value);
-
-  return Date.UTC(
-    g('year'),
-    g('month') - 1,
-    g('day'),
-    g('hour') % 24,
-    g('minute'),
-    g('second')
-  ) - ms;
+  const get = type => parts.find(x => x.type === type)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
-function athensTs(date, time) {
-  if (!date) return 0;
-
-  const [y, m, d] = date.split('-').map(Number);
-  const [hh, mm] = (time || '00:00').split(':').map(Number);
-  const guess = Date.UTC(y, m - 1, d, hh || 0, mm || 0);
-  const t1 = guess - offsetMs(guess);
-
-  return Math.floor((guess - offsetMs(t1)) / 1000);
+function previousDate(date) {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
 }
 
-const STATUS = {
-  finished: 'FT',
-  'after et': 'AET',
-  'after pen.': 'PEN',
-  'half time': 'HT',
-  postponed: 'PST',
-  cancelled: 'CANC',
-  canceled: 'CANC',
-  awarded: 'AWD',
-  abandoned: 'ABD',
-  'walk over': 'WO'
-};
+function kickoffTimestamp(date, kickoff) {
+  if (!date || !kickoff) return null;
 
-const short = e => {
-  const s = String(e.match_status || '').trim().toLowerCase();
+  const value = String(kickoff);
 
-  if (!s) return 'NS';
-  if (STATUS[s]) return STATUS[s];
+  const iso = value.includes('T')
+    ? value
+    : `${date}T${value.length === 5 ? `${value}:00` : value}Z`;
 
-  if (/^\d/.test(s) || e.match_live === '1') {
-    return parseInt(s, 10) > 45 ? '2H' : '1H';
-  }
+  const timestamp = Math.floor(Date.parse(iso) / 1000);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function statusCode(status) {
+  const raw = typeof status === 'object'
+    ? `${status?.status || ''} ${status?.state || ''} ${status?.display || ''}`
+    : String(status || '');
+
+  const s = raw.toLowerCase();
+
+  if (/cancel/.test(s)) return 'CANC';
+  if (/postpon/.test(s)) return 'PST';
+  if (/abandon/.test(s)) return 'ABD';
+  if (/suspend/.test(s)) return 'SUSP';
+  if (/penalty|penalties/.test(s)) return 'PEN';
+  if (/extra.?time/.test(s)) return 'AET';
+  if (/finish|postgame|full.?time|\bft\b|ms/.test(s)) return 'FT';
+  if (/half.?time|\bht\b/.test(s)) return 'HT';
+  if (/inplay|live|first.?half/.test(s)) return '1H';
+  if (/second.?half/.test(s)) return '2H';
+  if (/upcoming|scheduled|not.?started/.test(s)) return 'NS';
 
   return 'NS';
-};
-
-const WORLD = ['eurocups', 'intl', 'international', 'world'];
-
-const countryName = value => {
-  const c = String(value || '').trim();
-  return WORLD.includes(c.toLowerCase()) ? 'World' : c;
-};
-
-function cornerTotal(e) {
-  const stats = Array.isArray(e?.statistics) ? e.statistics : [];
-  const c = stats.find(s => /corner/i.test(String(s.type || '')));
-
-  if (!c) return null;
-
-  const h = num(c.home);
-  const a = num(c.away);
-
-  return h === null || a === null ? null : h + a;
 }
 
-export function toFx(e) {
-  const st = short(e);
-  const gh = num(e.match_hometeam_score);
-  const ga = num(e.match_awayteam_score);
+function scoreValue(value) {
+  return number(value);
+}
+
+function mapMatch(match, utcDate) {
+  const ts = match.timestamp
+    ? number(match.timestamp)
+    : kickoffTimestamp(utcDate, match.kickoff);
+
+  if (!ts) return null;
+
+  const home = match.home || {};
+  const away = match.away || {};
+  const league = match.league || {};
+  const status = statusCode(match.status);
+
+  const gh = scoreValue(home.score);
+  const ga = scoreValue(away.score);
 
   return {
     fixture: {
-      id: idOf(e.match_id),
-      timestamp: athensTs(e.match_date, e.match_time),
-      venue: { name: e.match_stadium || null },
-      status: { short: st }
+      id: match.id,
+      timestamp: ts,
+      date: {
+        timestamp: ts,
+        date: new Date(ts * 1000).toISOString()
+      },
+      venue: { name: match.venue?.name || null },
+      status: {
+        short: status,
+        long: typeof match.status === 'object'
+          ? match.status.display || match.status.status
+          : match.status
+      }
     },
+
     league: {
-      id: idOf(e.league_id),
-      name: e.league_name || '',
-      country: countryName(e.country_name),
-      logo: e.league_logo || '',
-      season: e.league_year || e.match_date?.slice(0, 4) || '',
-      round: e.match_round
-        ? `Round ${e.match_round}`
-        : (e.stage_name || '')
+      id: league.id,
+      name: league.name,
+      country: league.country || 'World',
+      logo: league.logo || null,
+      season: match.season || null,
+      round: match.week || match.round || null
     },
+
     teams: {
       home: {
-        id: idOf(e.match_hometeam_id),
-        name: e.match_hometeam_name || '',
-        logo: e.team_home_badge || ''
+        id: home.id,
+        name: home.name,
+        logo: home.logo || null
       },
       away: {
-        id: idOf(e.match_awayteam_id),
-        name: e.match_awayteam_name || '',
-        logo: e.team_away_badge || ''
+        id: away.id,
+        name: away.name,
+        logo: away.logo || null
       }
     },
-    goals: { home: gh, away: ga },
+
+    goals: {
+      home: gh,
+      away: ga
+    },
+
     score: {
       halftime: {
-        home: num(e.match_hometeam_halftime_score),
-        away: num(e.match_awayteam_halftime_score)
+        home: number(match.halftime?.home),
+        away: number(match.halftime?.away)
       },
       fulltime: {
-        home: num(e.match_hometeam_ft_score) ?? (st === 'FT' ? gh : null),
-        away: num(e.match_awayteam_ft_score) ?? (st === 'FT' ? ga : null)
+        home: status === 'FT' || status === 'AET' || status === 'PEN' ? gh : null,
+        away: status === 'FT' || status === 'AET' || status === 'PEN' ? ga : null
       }
     },
-    corners: cornerTotal(e)
+
+    corners: null
   };
 }
 
-// Διοργανώσεις που αναλύονται.
-// Τα IDs του apifootball.com διαφέρουν από τα IDs του API-Sports.
-const TRACK = [
-  ['england', /^(premier league|championship|fa cup|league cup|efl cup)$/i],
-  ['spain', /^(la liga|primera division|copa del rey)$/i],
-  ['italy', /^(serie a|serie b|coppa italia)$/i],
-  ['germany', /^(bundesliga|2\. bundesliga|dfb pokal)$/i],
-  ['france', /^(ligue 1|ligue 2|coupe de france)$/i],
-  ['greece', /^super league( 1)?$/i],
-  ['netherlands', /^eredivisie$/i],
-  ['portugal', /^(liga portugal|primeira liga)$/i],
-  ['turkey', /^(super lig|süper lig)$/i],
-  ['*', /(champions league|europa league|conference league)/i]
-];
+function mapTeamMatch(match) {
+  const date = match.date
+    ? String(match.date).replace(' ', 'T') + 'Z'
+    : null;
 
-export const altTracked = l =>
-  TRACK.some(([c, r]) => {
-    const country = String(l?.country || '').toLowerCase();
-    const name = String(l?.name || '');
+  const ts = number(match.timestamp) ||
+    (date ? Math.floor(Date.parse(date) / 1000) : null);
 
-    return (c === '*' || country === c) &&
-      r.test(name) &&
-      !/women|u\d\d|youth/i.test(name);
+  if (!ts) return null;
+
+  const home = match.home || {};
+  const away = match.away || {};
+  const status = statusCode(match.status);
+
+  return {
+    fixture: {
+      id: match.id,
+      timestamp: ts,
+      status: { short: status }
+    },
+
+    league: {
+      id: match.league?.id,
+      name: match.league?.name || '',
+      country: match.league?.country || ''
+    },
+
+    teams: {
+      home: {
+        id: home.id,
+        name: home.name,
+        logo: home.logo || null
+      },
+      away: {
+        id: away.id,
+        name: away.name,
+        logo: away.logo || null
+      }
+    },
+
+    goals: {
+      home: number(home.score),
+      away: number(away.score)
+    },
+
+    score: {
+      halftime: {
+        home: null,
+        away: null
+      }
+    },
+
+    corners: null
+  };
+}
+
+function parseScore(score) {
+  const match = String(score || '').match(/(\d+)\s*[-:]\s*(\d+)/);
+  return match
+    ? { home: Number(match[1]), away: Number(match[2]) }
+    : { home: null, away: null };
+}
+
+function mapH2H(match) {
+  const score = parseScore(match.score);
+  const timestamp = Math.floor(
+    Date.parse(`${match.date}T00:00:00Z`) / 1000
+  );
+
+  if (!Number.isFinite(timestamp)) return null;
+
+  return {
+    fixture: {
+      id: `${match.home?.id}-${match.away?.id}-${match.date}`,
+      timestamp
+    },
+
+    teams: {
+      home: {
+        id: match.home?.id,
+        name: match.home?.name
+      },
+      away: {
+        id: match.away?.id,
+        name: match.away?.name
+      }
+    },
+
+    goals: score
+  };
+}
+
+function mapStandingRow(row, homeRow, awayRow) {
+  const played = number(row.played);
+  const goalsFor = number(row.goals_for);
+  const goalsAgainst = number(row.goals_against);
+
+  const mapSplit = split => ({
+    played: number(split?.played),
+    win: number(split?.won),
+    draw: number(split?.drawn),
+    lose: number(split?.lost),
+    goals: {
+      for: number(split?.goals_for),
+      against: number(split?.goals_against)
+    }
   });
 
-export function makeAltApi(usage, name) {
+  return {
+    rank: number(row.rank),
+    points: number(row.points),
+    description: row.zone?.name || null,
+    form: row.form || null,
+
+    team: {
+      id: row.team?.id,
+      name: row.team?.name,
+      logo: row.team?.logo || null
+    },
+
+    all: {
+      played,
+      win: number(row.won),
+      draw: number(row.drawn),
+      lose: number(row.lost),
+      goals: {
+        for: goalsFor,
+        against: goalsAgainst
+      }
+    },
+
+    home: mapSplit(homeRow),
+    away: mapSplit(awayRow)
+  };
+}
+
+function mapStandings(data) {
+  const main = data?.standings || [];
+  const homeGroups = data?.home_standings || [];
+  const awayGroups = data?.away_standings || [];
+
+  return main.map((group, index) => {
+    const homeTable = homeGroups[index]?.table || [];
+    const awayTable = awayGroups[index]?.table || [];
+
+    const homeById = new Map(
+      homeTable.map(row => [id(row.team?.id), row])
+    );
+
+    const awayById = new Map(
+      awayTable.map(row => [id(row.team?.id), row])
+    );
+
+    return (group.table || []).map(row =>
+      mapStandingRow(
+        row,
+        homeById.get(id(row.team?.id)),
+        awayById.get(id(row.team?.id))
+      )
+    );
+  });
+}
+
+function mapLineups(data) {
+  if (!data?.home || !data?.away) return [];
+
+  return ['home', 'away'].map(side => {
+    const team = data[side];
+    const formation = data.formation?.[side];
+
+    return {
+      team: { id: team.id || null },
+      formation: formation ? String(formation) : null,
+      coach: team.coach || null,
+
+      startXI: (team.starting || []).map(player => ({
+        player: {
+          id: player.id,
+          name: player.name,
+          number: number(player.number),
+          pos: player.position || null
+        }
+      })),
+
+      substitutes: (team.subs || []).map(player => ({
+        player: {
+          id: player.id,
+          name: player.name,
+          number: number(player.number),
+          pos: player.position || null
+        }
+      }))
+    };
+  });
+}
+
+function mapInjuries(data) {
+  const injuries = data?.injuries;
+  if (!injuries) return [];
+
+  return [
+    ...(injuries.home || []).map(player => ({
+      team_id: data.home?.id,
+      name: player.name,
+      reason: player.status || '',
+      type: /questionable|doubtful/i.test(player.status || '')
+        ? 'Questionable'
+        : 'Missing'
+    })),
+
+    ...(injuries.away || []).map(player => ({
+      team_id: data.away?.id,
+      name: player.name,
+      reason: player.status || '',
+      type: /questionable|doubtful/i.test(player.status || '')
+        ? 'Questionable'
+        : 'Missing'
+    }))
+  ];
+}
+
+export function makeAltApi(usage, name = 'football') {
+  let lastRequest = 0;
+
   usage[name] = {
     limit: null,
     remaining: null,
     calls: 0,
     window: null,
-    error: null,
-    sample: null,
-    blocked: false
+    error: null
   };
 
-  const u = usage[name];
-  let last = 0;
+  const cache = new Map();
 
-  const evById = new Map();
-  const lastByTeam = new Map();
-  const lineupCache = new Map();
-  const statsCache = new Map();
+  async function request(endpoint, params = {}, ttl = 0) {
+    const clean = Object.fromEntries(
+      Object.entries(params).filter(([, value]) =>
+        value !== undefined && value !== null && value !== ''
+      )
+    );
 
-  async function call(action, params = {}) {
+    const cacheKey = `${endpoint}:${JSON.stringify(clean)}`;
+
+    const cached = cache.get(cacheKey);
+    if (ttl && cached && Date.now() - cached.time < ttl) {
+      return cached.data;
+    }
+
     const key = process.env.API_FOOTBALL_KEY;
+    if (!key) throw new Error('Λείπει το API_FOOTBALL_KEY');
 
-    if (!key) {
-      throw new Error('Λείπει το API_FOOTBALL_KEY στα GitHub Secrets');
+    const u = usage[name];
+
+    if (u.remaining !== null && u.remaining <= 0) {
+      throw new Error('QUOTA: εξαντλήθηκαν τα διαθέσιμα credits του Football API');
     }
 
-    if (u.blocked) {
-      throw new Error('BLOCKED: προσωρινή παύση κλήσεων API');
-    }
-
-    const wait = last + Number(process.env.API_DELAY_MS ?? 2500) - Date.now();
+    const delay = Number(process.env.API_DELAY_MS ?? 6500);
+    const wait = lastRequest + delay - Date.now();
 
     if (wait > 0) await sleep(wait);
 
-    const url = new URL(BASE);
-    url.searchParams.set('action', action);
+    const url = new URL(`${BASE}/${endpoint}`);
+    url.searchParams.set('api_key', key);
+    url.searchParams.set('lang', 'en');
 
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null && v !== '') {
-        url.searchParams.set(k, String(v));
-      }
+    for (const [k, v] of Object.entries(clean)) {
+      url.searchParams.set(k, String(v));
     }
 
-    url.searchParams.set('APIkey', key);
-
-    let res;
+    let response;
 
     try {
-      res = await fetch(url);
-    } catch {
-      u.error = `apifootball.com ${action}: αποτυχία σύνδεσης`;
-      throw new Error(u.error);
+      response = await fetch(url);
+    } catch (error) {
+      u.error = error.message;
+      throw error;
     }
 
-    last = Date.now();
+    lastRequest = Date.now();
     u.calls++;
 
-    let j;
+    let json;
 
     try {
-      j = await res.json();
+      json = await response.json();
     } catch {
-      u.error = `apifootball.com ${action}: μη έγκυρη απάντηση HTTP ${res.status}`;
-      throw new Error(u.error);
+      throw new Error(`Football API: μη έγκυρη απάντηση (${response.status})`);
     }
 
-    const fail = msg => {
-      if (
-        /key|suspend|expired|trial|payment|unauthor|forbidden/i.test(msg) ||
-        [401, 403].includes(res.status)
-      ) {
-        u.blocked = true;
-        msg = 'BLOCKED: ' + msg;
-      } else if (/limit|too many/i.test(msg)) {
-        msg = 'QUOTA: ' + msg;
+    if (Number.isFinite(Number(json.credits_remaining))) {
+      u.remaining = Number(json.credits_remaining);
+    }
+
+    if (!response.ok || json.success === false) {
+      const message = json.message || json.error || `HTTP ${response.status}`;
+      u.error = message;
+
+      if (response.status === 403) {
+        throw new Error(`QUOTA: ${message}`);
       }
 
-      u.error = msg.slice(0, 300);
-      throw new Error(msg);
-    };
-
-    if (j && !Array.isArray(j) && j.error !== undefined) {
-      const message = String(j.message || '');
-
-      if (
-        String(j.error) === '404' ||
-        /no (event|match|result|data|standing|odd|league|prediction)/i.test(message)
-      ) {
-        return [];
+      if (response.status === 429) {
+        throw new Error(`RATE LIMIT: ${message}`);
       }
 
-      return fail(`apifootball.com ${action}: ${j.error} ${message}`);
+      throw new Error(`Football API ${response.status}: ${message}`);
     }
 
-    if (!res.ok) {
-      return fail(`apifootball.com ${action}: HTTP ${res.status}`);
+    u.error = null;
+
+    const data = json.data ?? {};
+
+    if (ttl) {
+      cache.set(cacheKey, {
+        time: Date.now(),
+        data
+      });
     }
 
-    if (
-      action === 'get_events' &&
-      Array.isArray(j) &&
-      j[0] &&
-      !u.sample
-    ) {
-      u.sample = JSON.stringify(j[0]).slice(0, 700);
-    }
-
-    return j;
+    return data;
   }
 
-  const events = async (from, to, extra = {}) => {
-    const r = await call('get_events', {
-      from,
-      to,
-      timezone: TZ,
-      ...extra
-    });
+  return async function api(endpoint, params = {}) {
+    // Αγώνες ημέρας
+    if (endpoint === '/fixtures' && params.date) {
+      const date = params.date;
+      const dates = [previousDate(date), date];
 
-    if (Array.isArray(r)) {
-      r.forEach(e => {
-        if (e.match_id != null) {
-          evById.set(String(e.match_id), e);
-        }
-      });
+      const results = await Promise.all(
+        dates.map(async utcDate => {
+          const data = await request('/matches', { date: utcDate }, 45_000);
 
-      return r;
-    }
+          return (data.matches || [])
+            .map(match => mapMatch(match, utcDate))
+            .filter(Boolean);
+        })
+      );
 
-    return [];
-  };
-
-  const eventById = async id => {
-    if (evById.has(String(id))) {
-      return evById.get(String(id));
-    }
-
-    const today = ymd();
-
-    await events(
-      addDays(today, -2),
-      addDays(today, 7),
-      { match_id: id }
-    );
-
-    return evById.get(String(id)) || null;
-  };
-
-  const keyedMatch = (data, id) => {
-    if (!data || typeof data !== 'object') return {};
-    return data[String(id)] || data;
-  };
-
-  const standingsRaw = lid =>
-    supa.cached(`ac:standings:${lid}`, 12 * 3600, async () => {
-      const r = await call('get_standings', { league_id: lid });
-      return Array.isArray(r) ? r : [];
-    });
-
-  const sRow = r => {
-    const blk = p => ({
-      played: num(r[`${p}_league_payed`]) ?? 0,
-      win: num(r[`${p}_league_W`]) ?? 0,
-      draw: num(r[`${p}_league_D`]) ?? 0,
-      lose: num(r[`${p}_league_L`]) ?? 0,
-      goals: {
-        for: num(r[`${p}_league_GF`]) ?? 0,
-        against: num(r[`${p}_league_GA`]) ?? 0
-      }
-    });
-
-    return {
-      rank: num(r.overall_league_position),
-      team: {
-        id: idOf(r.team_id),
-        name: r.team_name,
-        logo: r.team_badge || ''
-      },
-      points: num(r.overall_league_PTS) ?? 0,
-      goalsDiff:
-        (num(r.overall_league_GF) ?? 0) -
-        (num(r.overall_league_GA) ?? 0),
-      group: r.stage_name || null,
-      form: null,
-      description: r.overall_promotion || null,
-      all: blk('overall'),
-      home: blk('home'),
-      away: blk('away')
-    };
-  };
-
-  const teamStats = r => {
-    if (!r) return {};
-
-    const s = sRow(r);
-    const avg = (a, b) => b ? +(a / b).toFixed(2) : null;
-
-    const f = g => ({
-      home: g(s.home),
-      away: g(s.away),
-      total: g(s.all)
-    });
-
-    return {
-      league: {
-        goals: {
-          for: {
-            average: f(x => avg(x.goals.for, x.played)),
-            total: f(x => x.goals.for)
-          },
-          against: {
-            average: f(x => avg(x.goals.against, x.played)),
-            total: f(x => x.goals.against)
-          }
-        },
-        fixtures: {
-          played: f(x => x.played),
-          wins: f(x => x.win),
-          draws: f(x => x.draw),
-          loses: f(x => x.lose)
-        }
-      }
-    };
-  };
-
-  const getH2H = async (homeId, awayId) => {
-    const raw = await call('get_H2H', {
-      firstTeamId: homeId,
-      secondTeamId: awayId
-    });
-
-    // Η τεκμηρίωση επιστρέφει αντικείμενο, αλλά υποστηρίζουμε
-    // και απάντηση μέσα σε πίνακα για συμβατότητα.
-    const data = Array.isArray(raw) ? (raw[0] || {}) : (raw || {});
-
-    const h2h = Array.isArray(data.firstTeam_VS_secondTeam)
-      ? data.firstTeam_VS_secondTeam
-      : [];
-
-    const homeRecent = Array.isArray(data.firstTeam_lastResults)
-      ? data.firstTeam_lastResults
-      : [];
-
-    const awayRecent = Array.isArray(data.secondTeam_lastResults)
-      ? data.secondTeam_lastResults
-      : [];
-
-    lastByTeam.set(String(homeId), homeRecent.map(toFx));
-    lastByTeam.set(String(awayId), awayRecent.map(toFx));
-
-    return h2h.map(toFx);
-  };
-
-  const getPrediction = async e => {
-    const date = e.match_date || ymd();
-
-    const raw = await call('get_predictions', {
-      from: date,
-      to: date,
-      match_id: e.match_id
-    });
-
-    const rows = Array.isArray(raw) ? raw : [];
-    const row = rows.find(x => String(x.match_id) === String(e.match_id))
-      || rows[0];
-
-    if (!row) return {};
-
-    const home = num(row.prob_HW);
-    const draw = num(row.prob_D);
-    const away = num(row.prob_AW);
-
-    const percent =
-      home !== null && draw !== null && away !== null
-        ? { home, draw, away }
-        : null;
-
-    return {
-      percent,
-      advice: row.advice || null
-    };
-  };
-
-  const getLineups = async id => {
-    if (lineupCache.has(String(id))) {
-      return lineupCache.get(String(id));
-    }
-
-    const raw = await call('get_lineups', { match_id: id });
-    const data = keyedMatch(raw, id);
-    const lineup = data.lineup || data;
-
-    lineupCache.set(String(id), lineup || {});
-    return lineup || {};
-  };
-
-  const getStatistics = async id => {
-    if (statsCache.has(String(id))) {
-      return statsCache.get(String(id));
-    }
-
-    const raw = await call('get_statistics', { match_id: id });
-    const data = keyedMatch(raw, id);
-    const stats = Array.isArray(data.statistics) ? data.statistics : [];
-
-    statsCache.set(String(id), stats);
-    return stats;
-  };
-
-  const H = {
-    '/fixtures': async p => {
-      if (p.date) {
-        return (await events(p.date, p.date)).map(toFx);
-      }
-
-      if (p.team) {
-        return (lastByTeam.get(String(p.team)) || [])
-          .slice(0, Number(p.last) || 5);
-      }
-
-      return [];
-    },
-
-    '/leagues': async () => {
-      const rows = await call('get_leagues');
-
-      if (!Array.isArray(rows)) return [];
-
-      return rows.map(x => ({
-        league: {
-          id: idOf(x.league_id),
-          name: x.league_name,
-          type: 'League',
-          logo: x.league_logo || ''
-        },
-        country: {
-          name: countryName(x.country_name),
-          code: ''
-        }
-      }));
-    },
-
-    '/standings': async p => {
-      const r = await standingsRaw(p.league);
-
-      return r.length
-        ? [{ league: { standings: [r.map(sRow)] } }]
-        : [];
-    },
-
-    '/predictions': async p => {
-      const e = await eventById(p.fixture);
-
-      if (!e) return [];
-
-      const rows = await standingsRaw(e.league_id).catch(() => []);
-
-      const find = id =>
-        rows.find(r => String(r.team_id) === String(id));
-
-      let h2h = [];
-      let prediction = {};
-
-      try {
-        h2h = await getH2H(
-          e.match_hometeam_id,
-          e.match_awayteam_id
+      const matches = results
+        .flat()
+        .filter(match =>
+          athensDate(match.fixture.timestamp) === date
         );
-      } catch (err) {
-        if (/QUOTA|BLOCKED/.test(err.message)) throw err;
-      }
 
-      try {
-        prediction = await getPrediction(e);
-      } catch (err) {
-        if (/QUOTA|BLOCKED/.test(err.message)) throw err;
-      }
+      return [...new Map(
+        matches.map(match => [id(match.fixture.id), match])
+      ).values()];
+    }
 
-      return [{
-        teams: {
-          home: teamStats(find(e.match_hometeam_id)),
-          away: teamStats(find(e.match_awayteam_id))
-        },
-        h2h,
-        predictions: prediction
-      }];
-    },
+    // Πρόσφατοι αγώνες ομάδας
+    if (endpoint === '/fixtures' && params.team) {
+      const data = await request(
+        '/team_matches',
+        { team_id: params.team },
+        30 * 60_000
+      );
 
-    '/odds': async p => {
-      const e = await eventById(p.fixture);
-      const date = e?.match_date || ymd();
+      return (data.matches || [])
+        .map(mapTeamMatch)
+        .filter(Boolean)
+        .sort((a, b) =>
+          b.fixture.timestamp - a.fixture.timestamp
+        );
+    }
 
-      const rows = await call('get_odds', {
-        from: date,
-        to: date,
-        match_id: p.fixture
-      });
+    // Κατάλογος διοργανώσεων
+    if (endpoint === '/leagues') {
+      const data = await request('/leagues', {}, 12 * 60 * 60_000);
 
-      if (!Array.isArray(rows) || !rows.length) return [];
-
-      return [{
-        bookmakers: rows.map(r => ({
-          name: r.odd_bookmakers || 'apifootball.com',
-          bets: [
-            {
-              name: 'Match Winner',
-              values: [
-                { value: 'Home', odd: r.odd_1 },
-                { value: 'Draw', odd: r.odd_x },
-                { value: 'Away', odd: r.odd_2 }
-              ]
-            },
-            {
-              name: 'Goals Over/Under',
-              values: [
-                { value: 'Over 2.5', odd: r['o+2.5'] },
-                { value: 'Under 2.5', odd: r['u+2.5'] }
-              ]
-            },
-            {
-              name: 'Both Teams Score',
-              values: [
-                { value: 'Yes', odd: r.bts_yes },
-                { value: 'No', odd: r.bts_no }
-              ]
-            }
-          ]
-        }))
-      }];
-    },
-
-    '/fixtures/lineups': async p => {
-      const e = await eventById(p.fixture);
-      if (!e) return [];
-
-      const lineup = await getLineups(p.fixture);
-      const home = lineup.home || {};
-      const away = lineup.away || {};
-
-      if (
-        !home.starting_lineups?.length ||
-        !away.starting_lineups?.length
-      ) {
-        return [];
-      }
-
-      const makeTeam = (side, id) => {
-        const data = lineup[side] || {};
-
-        return {
-          team: { id: idOf(id) },
-          formation: e[`match_${side}team_system`] || null,
-          coach: {
-            name: data.coach?.[0]?.lineup_player || null
+      return (data.data || []).flatMap(country =>
+        (country.leagues || []).map(league => ({
+          league: {
+            id: league.id,
+            name: league.name,
+            type: 'League',
+            logo: league.logo || null
           },
-          startXI: (data.starting_lineups || []).map(x => ({
-            player: {
-              number: num(x.lineup_number),
-              name: x.lineup_player,
-              pos: x.lineup_position
-            }
-          })),
-          substitutes: (data.substitutes || []).map(x => ({
-            player: {
-              number: num(x.lineup_number),
-              name: x.lineup_player,
-              pos: x.lineup_position
-            }
-          }))
-        };
-      };
-
-      return [
-        makeTeam('home', e.match_hometeam_id),
-        makeTeam('away', e.match_awayteam_id)
-      ];
-    },
-
-    '/fixtures/statistics': async p => {
-      const stats = await getStatistics(p.fixture);
-
-      const c = stats.find(s => /corner/i.test(String(s.type || '')));
-
-      if (!c) return [];
-
-      return [
-        {
-          team: { id: null },
-          statistics: [{
-            type: 'Corner Kicks',
-            value: num(c.home)
-          }]
-        },
-        {
-          team: { id: null },
-          statistics: [{
-            type: 'Corner Kicks',
-            value: num(c.away)
-          }]
-        }
-      ];
-    },
-
-    '/injuries': async () => {
-      throw new Error(
-        'UNSUPPORTED: οι απουσίες δεν παρέχονται από αυτόν τον πάροχο'
+          country: {
+            name: country.country || '',
+            code: ''
+          }
+        }))
       );
     }
-  };
 
-  return async function api(endpoint, params = {}) {
-    const handler = H[endpoint];
+    // Βαθμολογίες
+    if (endpoint === '/standings') {
+      const data = await request(
+        '/league_standings',
+        {
+          league_id: params.league,
+          season: params.season
+        },
+        12 * 60 * 60_000
+      );
 
-    if (!handler) {
-      throw new Error(`UNSUPPORTED: ${endpoint}`);
+      const standings = mapStandings(data);
+
+      return [{
+        league: {
+          standings
+        }
+      }];
     }
 
-    return handler(params);
+    // H2H: χρησιμοποιείται από το μοντέλο ανάλυσης
+    if (endpoint === '/predictions') {
+      const data = await request(
+        '/h2h',
+        { match_id: params.fixture },
+        12 * 60 * 60_000
+      );
+
+      return [{
+        h2h: (data.h2h || [])
+          .map(mapH2H)
+          .filter(Boolean)
+      }];
+    }
+
+    // Ενδεκάδες
+    if (endpoint === '/fixtures/lineups') {
+      const data = await request(
+        '/lineups',
+        { match_id: params.fixture },
+        5 * 60_000
+      );
+
+      return mapLineups(data);
+    }
+
+    // Τραυματισμοί/τιμωρίες
+    if (endpoint === '/injuries') {
+      const data = await request(
+        '/injuries',
+        { match_id: params.fixture },
+        30 * 60_000
+      );
+
+      return mapInjuries(data);
+    }
+
+    // Στατιστικά αγώνα
+    if (endpoint === '/fixtures/statistics') {
+      const data = await request(
+        '/live_match_details',
+        { match_id: params.fixture },
+        60_000
+      );
+
+      return data.stats || [];
+    }
+
+    // Το Live Football API δεν διαθέτει endpoint αποδόσεων.
+    if (endpoint === '/odds') {
+      return [];
+    }
+
+    throw new Error(`Μη υποστηριζόμενο Football API endpoint: ${endpoint}`);
   };
 }
