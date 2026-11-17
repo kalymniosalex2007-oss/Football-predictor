@@ -48,24 +48,66 @@ function kickoffTimestamp(date, kickoff) {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
+// Μετατρέπει οποιαδήποτε μορφή status σε ενιαίο κείμενο.
+function statusText(status) {
+  if (status === null || status === undefined) return '';
+
+  if (typeof status !== 'object') {
+    return String(status);
+  }
+
+  return [
+    status.short,
+    status.long,
+    status.status,
+    status.state,
+    status.display,
+    status.name,
+    status.description,
+    status.type
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+// Αναγνωρίζει την κατάσταση του αγώνα ανεξάρτητα από τη μορφή του API.
 function statusCode(status) {
-  const raw = typeof status === 'object'
-    ? `${status?.status || ''} ${status?.state || ''} ${status?.display || ''}`
-    : String(status || '');
+  const raw = statusText(status).toLowerCase();
 
-  const s = raw.toLowerCase();
+  if (/cancel|canceled|cancelled/.test(raw)) return 'CANC';
+  if (/postpon|delayed/.test(raw)) return 'PST';
+  if (/abandon/.test(raw)) return 'ABD';
+  if (/suspend/.test(raw)) return 'SUSP';
+  if (/walk.?over|awarded/.test(raw)) return 'AWD';
+  if (/not.?played/.test(raw)) return 'WO';
 
-  if (/cancel/.test(s)) return 'CANC';
-  if (/postpon/.test(s)) return 'PST';
-  if (/abandon/.test(s)) return 'ABD';
-  if (/suspend/.test(s)) return 'SUSP';
-  if (/penalty|penalties/.test(s)) return 'PEN';
-  if (/extra.?time/.test(s)) return 'AET';
-  if (/finish|postgame|full.?time|\bft\b|ms/.test(s)) return 'FT';
-  if (/half.?time|\bht\b/.test(s)) return 'HT';
-  if (/inplay|live|first.?half/.test(s)) return '1H';
-  if (/second.?half/.test(s)) return '2H';
-  if (/upcoming|scheduled|not.?started/.test(s)) return 'NS';
+  if (
+    /\bpen\b|penalty shootout|penalties|after penalties|finished after penalties/.test(raw)
+  ) return 'PEN';
+
+  if (/after extra time|aet|extra.?time.*finish|finished.*extra.?time/.test(raw)) {
+    return 'AET';
+  }
+
+  if (
+    /finish|finished|postgame|full.?time|fulltime|\bft\b|\bms\b|completed|ended/.test(raw)
+  ) return 'FT';
+
+  if (/half.?time|\bht\b/.test(raw)) return 'HT';
+
+  if (/second.?half|\b2h\b/.test(raw)) return '2H';
+
+  if (/first.?half|\b1h\b|inplay|in.?progress|live/.test(raw)) {
+    return '1H';
+  }
+
+  if (/extra.?time/.test(raw)) return 'ET';
+
+  if (/upcoming|scheduled|not.?started|not started|\bns\b/.test(raw)) {
+    return 'NS';
+  }
+
+  if (/to be determined|\btbd\b/.test(raw)) return 'TBD';
 
   return 'NS';
 }
@@ -84,10 +126,13 @@ function mapMatch(match, utcDate) {
   const home = match.home || {};
   const away = match.away || {};
   const league = match.league || {};
+
   const status = statusCode(match.status);
 
   const gh = scoreValue(home.score);
   const ga = scoreValue(away.score);
+
+  const finished = ['FT', 'AET', 'PEN'].includes(status);
 
   return {
     fixture: {
@@ -97,12 +142,12 @@ function mapMatch(match, utcDate) {
         timestamp: ts,
         date: new Date(ts * 1000).toISOString()
       },
-      venue: { name: match.venue?.name || null },
+      venue: {
+        name: match.venue?.name || null
+      },
       status: {
         short: status,
-        long: typeof match.status === 'object'
-          ? match.status.display || match.status.status
-          : match.status
+        long: statusText(match.status) || status
       }
     },
 
@@ -139,8 +184,8 @@ function mapMatch(match, utcDate) {
         away: number(match.halftime?.away)
       },
       fulltime: {
-        home: status === 'FT' || status === 'AET' || status === 'PEN' ? gh : null,
-        away: status === 'FT' || status === 'AET' || status === 'PEN' ? ga : null
+        home: finished ? gh : null,
+        away: finished ? ga : null
       }
     },
 
@@ -166,7 +211,10 @@ function mapTeamMatch(match) {
     fixture: {
       id: match.id,
       timestamp: ts,
-      status: { short: status }
+      status: {
+        short: status,
+        long: statusText(match.status) || status
+      }
     },
 
     league: {
@@ -206,13 +254,21 @@ function mapTeamMatch(match) {
 
 function parseScore(score) {
   const match = String(score || '').match(/(\d+)\s*[-:]\s*(\d+)/);
+
   return match
-    ? { home: Number(match[1]), away: Number(match[2]) }
-    : { home: null, away: null };
+    ? {
+        home: Number(match[1]),
+        away: Number(match[2])
+      }
+    : {
+        home: null,
+        away: null
+      };
 }
 
 function mapH2H(match) {
   const score = parseScore(match.score);
+
   const timestamp = Math.floor(
     Date.parse(`${match.date}T00:00:00Z`) / 1000
   );
@@ -319,7 +375,9 @@ function mapLineups(data) {
     const formation = data.formation?.[side];
 
     return {
-      team: { id: team.id || null },
+      team: {
+        id: team.id || null
+      },
       formation: formation ? String(formation) : null,
       coach: team.coach || null,
 
@@ -346,6 +404,7 @@ function mapLineups(data) {
 
 function mapInjuries(data) {
   const injuries = data?.injuries;
+
   if (!injuries) return [];
 
   return [
@@ -392,12 +451,16 @@ export function makeAltApi(usage, name = 'football') {
     const cacheKey = `${endpoint}:${JSON.stringify(clean)}`;
 
     const cached = cache.get(cacheKey);
+
     if (ttl && cached && Date.now() - cached.time < ttl) {
       return cached.data;
     }
 
     const key = process.env.API_FOOTBALL_KEY;
-    if (!key) throw new Error('Λείπει το API_FOOTBALL_KEY');
+
+    if (!key) {
+      throw new Error('Λείπει το API_FOOTBALL_KEY');
+    }
 
     const u = usage[name];
 
@@ -411,6 +474,7 @@ export function makeAltApi(usage, name = 'football') {
     if (wait > 0) await sleep(wait);
 
     const url = new URL(`${BASE}/${endpoint}`);
+
     url.searchParams.set('api_key', key);
     url.searchParams.set('lang', 'en');
 
@@ -444,6 +508,7 @@ export function makeAltApi(usage, name = 'football') {
 
     if (!response.ok || json.success === false) {
       const message = json.message || json.error || `HTTP ${response.status}`;
+
       u.error = message;
 
       if (response.status === 403) {
@@ -479,7 +544,11 @@ export function makeAltApi(usage, name = 'football') {
 
       const results = await Promise.all(
         dates.map(async utcDate => {
-          const data = await request('/matches', { date: utcDate }, 45_000);
+          const data = await request(
+            '/matches',
+            { date: utcDate },
+            45_000
+          );
 
           return (data.matches || [])
             .map(match => mapMatch(match, utcDate))
@@ -516,7 +585,11 @@ export function makeAltApi(usage, name = 'football') {
 
     // Κατάλογος διοργανώσεων
     if (endpoint === '/leagues') {
-      const data = await request('/leagues', {}, 12 * 60 * 60_000);
+      const data = await request(
+        '/leagues',
+        {},
+        12 * 60 * 60_000
+      );
 
       return (data.data || []).flatMap(country =>
         (country.leagues || []).map(league => ({
