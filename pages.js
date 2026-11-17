@@ -550,23 +550,29 @@ ${resChip(res, r.key)}
 export function homePage({ today, rows, res, premCount, popular, kpi, window: w }) {
   const now = Math.floor(Date.now() / 1000);
 
-  // Έγκυρος μελλοντικός αγώνας: δεν εμφανίζουμε παλιά pre-match προγνωστικά.
+  // Έλεγχος αν ο αγώνας δεν έχει ξεκινήσει ακόμη.
   const isUpcoming = r => {
     const kickoff = toUnix(r.ts);
     return Number.isFinite(kickoff) && kickoff > now + 60;
   };
 
+  // Τα σημερινά προγνωστικά παραμένουν ορατά όλη την ημέρα,
+  // ακόμη κι όταν ο αγώνας έχει ξεκινήσει ή ολοκληρωθεί.
   const free = rows
     .filter(r =>
       r.pred?.status === 'ok' &&
-      r.date === today &&
-      isUpcoming(r)
+      r.date === today
     )
     .sort((a, b) => b.pred.pct - a.pred.pct)
     .slice(0, 6);
 
+  // Οι επιλεγμένοι αγώνες εμφανίζονται μόνο πριν από την έναρξή τους.
   const featured = rows
-    .filter(r => r.tracked && r.date === today && isUpcoming(r))
+    .filter(r =>
+      r.tracked &&
+      r.date === today &&
+      isUpcoming(r)
+    )
     .sort((a, b) => toUnix(a.ts) - toUnix(b.ts))
     .slice(0, 6);
 
@@ -580,9 +586,15 @@ export function homePage({ today, rows, res, premCount, popular, kpi, window: w 
     .sort((a, b) => toUnix(b.ts) - toUnix(a.ts))
     .slice(0, 8);
 
-  // Εμφανίζονται μόνο πραγματικές αναλύσεις με ουσιαστικά δεδομένα.
+  // Οι προτεινόμενες αναλύσεις αφορούν μόνο πραγματικές
+  // αναλύσεις αγώνων που δεν έχουν ξεκινήσει.
   const sug = rows
-    .filter(r => r.analysed && r.tracked && r.date >= today && isUpcoming(r))
+    .filter(r =>
+      r.analysed &&
+      r.tracked &&
+      r.date >= today &&
+      isUpcoming(r)
+    )
     .sort((a, b) => toUnix(a.ts) - toUnix(b.ts))
     .slice(0, 4);
 
@@ -615,7 +627,7 @@ ${kpi.n < 30 ? '<p class="note">Μικρό δείγμα: τα ποσοστά δ�
 <h2>Σημερινά προγνωστικά</h2>
 ${free.length
   ? `<div class="grid3">${free.map(r => pickCard(r, res)).join('')}</div>`
-  : '<p class="empty">Δεν υπάρχουν ακόμη δημοσιευμένα προγνωστικά για επερχόμενους αγώνες σήμερα.</p>'}
+  : '<p class="empty">Δεν υπάρχουν ακόμη δημοσιευμένα προγνωστικά για σήμερα.</p>'}
 
 <section class="locked" id="premium-today" data-day="${today}">
 <span class="badge">Premium</span>
