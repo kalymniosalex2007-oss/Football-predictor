@@ -3,7 +3,7 @@ name: Update and publish
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # κάθε 15 λεπτά, όλο το 24ωρο (UTC)
+    - cron: '*/15 * * * *'
   workflow_dispatch:
   push:
     branches: [main]
@@ -79,9 +79,14 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
-      - uses: actions/upload-pages-artifact@v3
+      - name: Upload unique Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
+          name: football-predictor-pages
           path: dist
 
       - id: deployment
+        name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: football-predictor-pages
