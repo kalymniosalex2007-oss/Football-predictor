@@ -44,6 +44,60 @@ const toUnix = value => {
   return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : NaN;
 };
 
+// Έλεγχος αν μια τιμή περιέχει πραγματικά δεδομένα.
+// Τα 0 και false θεωρούνται έγκυρες τιμές.
+const hasData = value => {
+  if (value == null) return false;
+
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+
+  if (typeof value === 'boolean') {
+    return true;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(hasData);
+  }
+
+  if (typeof value === 'object') {
+    return Object.entries(value).some(([key, item]) => {
+      // Τα μηδενικά στατιστικά Head to Head δεν αποτελούν
+      // από μόνα τους πραγματικό ιστορικό αγώνων.
+      if ((key === 'hw' || key === 'aw') && item === 0) {
+        return false;
+      }
+
+      return hasData(item);
+    });
+  }
+
+  return false;
+};
+
+// Έλεγχος αν υπάρχει πραγματική ανάλυση μπάσκετ.
+const hasBasketballAnalysis = analysis => {
+  if (!analysis || typeof analysis !== 'object') return false;
+
+  const form = analysis.form || {};
+  const table = analysis.table || {};
+  const h2h = analysis.h2h || {};
+
+  return (
+    (Array.isArray(form.home) && form.home.length > 0) ||
+    (Array.isArray(form.away) && form.away.length > 0) ||
+    hasData(table.home) ||
+    hasData(table.away) ||
+    (Array.isArray(h2h.list) && h2h.list.length > 0) ||
+    hasData(analysis.odds)
+  );
+};
+
 export const adaptFb = m => ({
   sport: 'football',
   key: `f:${m.fixture_id}`,
@@ -66,7 +120,7 @@ export const adaptFb = m => ({
   pred: m.prediction,
   tier: m.tier,
   date: m.match_date,
-  analysed: !!m.analysis
+  analysed: hasData(m.analysis)
 });
 
 export const adaptBb = g => ({
@@ -91,7 +145,7 @@ export const adaptBb = g => ({
   pred: g.prediction,
   tier: g.tier,
   date: g.match_date,
-  analysed: !!g.analysis
+  analysed: hasBasketballAnalysis(g.analysis)
 });
 
 // Καταστάσεις ποδοσφαίρου που θεωρούνται ζωντανές.
@@ -99,6 +153,20 @@ const FB_LIVE = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
 
 // Ολοκληρωμένες καταστάσεις.
 const DONE = ['FT', 'AET', 'PEN', 'AOT'];
+
+// Έλεγχος αν πρέπει να εμφανιστεί σκορ.
+// Πριν από την έναρξη εμφανίζεται μόνο η ώρα του αγώνα.
+const scoreVisible = r => {
+  if (!r) return false;
+
+  const status = String(r.status || '').toUpperCase().trim();
+
+  const live = r.sport === 'football'
+    ? FB_LIVE
+    : BB_LIVE;
+
+  return live.includes(status) || DONE.includes(status);
+};
 
 // Αυστηρός έλεγχος πραγματικού LIVE αγώνα.
 export const isLive = r => {
@@ -171,7 +239,7 @@ const card = (r, res) => {
           : '<small>Χωρίς ανάλυση (εκτός των διοργανώσεων που αναλύουμε).</small>';
 
   const t = (n, l, g) =>
-    `<div>${l ? `<img src="${e(l)}" alt="" width="28" height="28" loading="lazy">` : ''}${e(n)}${g != null ? `<b class="sc">${g}</b>` : ''}</div>`;
+    `<div>${l ? `<img src="${e(l)}" alt="" width="28" height="28" loading="lazy">` : ''}${e(n)}${scoreVisible(r) && g != null ? `<b class="sc">${g}</b>` : ''}</div>`;
 
   return `<article class="card">
     <div class="when">
@@ -512,6 +580,7 @@ export function homePage({ today, rows, res, premCount, popular, kpi, window: w 
     .sort((a, b) => toUnix(b.ts) - toUnix(a.ts))
     .slice(0, 8);
 
+  // Εμφανίζονται μόνο πραγματικές αναλύσεις με ουσιαστικά δεδομένα.
   const sug = rows
     .filter(r => r.analysed && r.tracked && r.date >= today && isUpcoming(r))
     .sort((a, b) => toUnix(a.ts) - toUnix(b.ts))
@@ -521,7 +590,7 @@ export function homePage({ today, rows, res, premCount, popular, kpi, window: w 
     `<a class="mini" href="${gameLink(r)}">
 <small>${r.sport === 'football' ? 'Ποδόσφαιρο' : 'Μπάσκετ'} · ${fmtTime(r.ts)} · ${e(r.lname)}</small>
 <b>${e(r.home)} - ${e(r.away)}</b>
-${r.sh != null ? `<span class="sc">${r.sh} - ${r.sa}</span>` : ''}
+${scoreVisible(r) && r.sh != null && r.sa != null ? `<span class="sc">${r.sh} - ${r.sa}</span>` : ''}
 </a>`;
 
   const body = `<section class="hero home">
@@ -592,7 +661,7 @@ ${sug.length
 export function bbNarrative(g) {
   const a = g.analysis, p = g.prediction;
 
-  if (!a) return [];
+  if (!hasBasketballAnalysis(a)) return [];
 
   const rec = r => {
     if (!Array.isArray(r) || !r.length) return 'Δεν υπάρχουν διαθέσιμα πρόσφατα αποτελέσματα.';
@@ -648,6 +717,7 @@ export function bbGamePage(g, res) {
   const a = g.analysis, p = g.prediction;
   const name = `${g.home_name} - ${g.away_name}`;
   const r = adaptBb(g);
+  const hasAnalysis = hasBasketballAnalysis(a);
 
   const frm = (n, l) => {
     const list = Array.isArray(l) ? l : [];
@@ -661,7 +731,7 @@ ${list.map(x => `<li><span>${e(x.date || '')} ${x.home ? 'vs' : '@'} ${e(x.opp |
 </div>`;
   };
 
-  const o = a?.odds;
+  const o = hasAnalysis ? a?.odds : null;
 
   const imp = (x, y) => {
     const n1 = Number(x), n2 = Number(y);
@@ -822,7 +892,7 @@ ${resChip(res, r.key)}`
 <div class="vs">
 <div><img src="${e(g.home_logo || '')}" alt="" width="72" height="72"><h1>${e(g.home_name)}</h1></div>
 <div class="mid">
-<b>${g.score_home != null ? `${g.score_home} - ${g.score_away}` : fmtTime(g.kickoff_ts)}</b>
+<b>${scoreVisible(r) && g.score_home != null && g.score_away != null ? `${g.score_home} - ${g.score_away}` : fmtTime(g.kickoff_ts)}</b>
 <small>${fmtDay(g.match_date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</small>
 <small>${e(stl(r))}</small>
 </div>
@@ -830,7 +900,7 @@ ${resChip(res, r.key)}`
 </div>
 </section>
 
-${a
+${hasAnalysis
   ? `<section class="panel ai">
 <h2>Ανάλυση αγώνα <small>(αυτόματη, με βάση τα δεδομένα)</small></h2>
 ${bbNarrative(g).map(x => `<p>${e(x)}</p>`).join('')}
