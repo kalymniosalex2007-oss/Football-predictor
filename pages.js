@@ -1,3 +1,4 @@
+
 import fs from 'node:fs';
 import { bb, BB_LIVE } from './basketball.js';
 import { layout, e, u, NAME, SITE } from './render.js';
@@ -110,31 +111,20 @@ export const isLive = r => {
     ? FB_LIVE
     : BB_LIVE;
 
-  // Πρέπει να υπάρχει κατάσταση ζωντανού αγώνα.
   if (!allowed.includes(status)) return false;
 
-  // Απαιτείται έγκυρη ώρα έναρξης.
   const kickoff = toUnix(r.ts);
 
   if (!Number.isFinite(kickoff)) return false;
-
-  // Δεν εμφανίζουμε μελλοντικούς αγώνες.
   if (kickoff > now + 300) return false;
 
-  // Μέγιστη λογική διάρκεια αγώνα.
   const maxDuration = r.sport === 'basketball'
     ? 5 * 60 * 60
     : 4 * 60 * 60;
 
   if (now - kickoff > maxDuration) return false;
-
-  // Απαιτείται πρόσφατη ενημέρωση από το API.
   if (!Number.isFinite(r.updated)) return false;
-
-  // Αποκλείουμε παλιά δεδομένα.
   if (now - r.updated > 40 * 60) return false;
-
-  // Αποκλείουμε χρονικές σημάνσεις από το μέλλον.
   if (r.updated > now + 60) return false;
 
   return true;
@@ -315,7 +305,7 @@ if(i)i.checked=true
 });
 ap()
 }
-cal.onchange=function(){
+if(cal)cal.onchange=function(){
 var v=cal.value;
 if(!v)return;
 if(v<cal.min||v>cal.max){
@@ -485,18 +475,31 @@ const pickCard = (r, res) =>
 <small>${r.sport === 'football' ? 'Ποδόσφαιρο' : 'Μπάσκετ'} · ${fmtTime(r.ts)} · ${e(r.lname)}</small>
 <strong>${e(r.home)} - ${e(r.away)}</strong>
 <span class="sel">${e(r.pred.label)}</span>
-<em>${r.pred.pct}% · εμπιστοσύνη ${e(r.pred.confidence.toLowerCase())}</em>
+<em>${r.pred.pct}% · εμπιστοσύνη ${e(String(r.pred.confidence || 'μέτριο').toLowerCase())}</em>
 ${resChip(res, r.key)}
 </a>`;
 
 export function homePage({ today, rows, res, premCount, popular, kpi, window: w }) {
+  const now = Math.floor(Date.now() / 1000);
+
+  // Έγκυρος μελλοντικός αγώνας: δεν εμφανίζουμε παλιά pre-match προγνωστικά.
+  const isUpcoming = r => {
+    const kickoff = toUnix(r.ts);
+    return Number.isFinite(kickoff) && kickoff > now + 60;
+  };
+
   const free = rows
-    .filter(r => r.pred?.status === 'ok' && r.date === today)
+    .filter(r =>
+      r.pred?.status === 'ok' &&
+      r.date === today &&
+      isUpcoming(r)
+    )
     .sort((a, b) => b.pred.pct - a.pred.pct)
     .slice(0, 6);
 
   const featured = rows
-    .filter(r => r.tracked && r.date === today)
+    .filter(r => r.tracked && r.date === today && isUpcoming(r))
+    .sort((a, b) => toUnix(a.ts) - toUnix(b.ts))
     .slice(0, 6);
 
   // Εμφανίζονται μόνο αγώνες που περνούν τον αυστηρό έλεγχο LIVE.
@@ -506,11 +509,12 @@ export function homePage({ today, rows, res, premCount, popular, kpi, window: w 
 
   const recent = rows
     .filter(r => DONE.includes(r.status) && r.tracked && r.sh != null)
-    .sort((a, b) => b.ts - a.ts)
+    .sort((a, b) => toUnix(b.ts) - toUnix(a.ts))
     .slice(0, 8);
 
   const sug = rows
-    .filter(r => r.analysed && r.tracked && r.date >= today)
+    .filter(r => r.analysed && r.tracked && r.date >= today && isUpcoming(r))
+    .sort((a, b) => toUnix(a.ts) - toUnix(b.ts))
     .slice(0, 4);
 
   const mini = r =>
@@ -542,7 +546,7 @@ ${kpi.n < 30 ? '<p class="note">Μικρό δείγμα: τα ποσοστά δ�
 <h2>Σημερινά προγνωστικά</h2>
 ${free.length
   ? `<div class="grid3">${free.map(r => pickCard(r, res)).join('')}</div>`
-  : '<p class="empty">Δεν υπάρχουν ακόμη δημοσιευμένα προγνωστικά για σήμερα.</p>'}
+  : '<p class="empty">Δεν υπάρχουν ακόμη δημοσιευμένα προγνωστικά για επερχόμενους αγώνες σήμερα.</p>'}
 
 <section class="locked" id="premium-today" data-day="${today}">
 <span class="badge">Premium</span>
@@ -557,7 +561,7 @@ ${live.length
   : '<p class="note">Δεν υπάρχουν αγώνες σε εξέλιξη με πρόσφατα επιβεβαιωμένα δεδομένα.</p>'}
 
 ${featured.length
-  ? `<h2>Επιλεγμένοι αγώνες της ημέρας</h2><div class="minis">${featured.map(mini).join('')}</div>`
+  ? `<h2>Επιλεγμένοι επερχόμενοι αγώνες της ημέρας</h2><div class="minis">${featured.map(mini).join('')}</div>`
   : ''}
 
 ${recent.length
@@ -569,7 +573,7 @@ ${popular.length
   : ''}
 
 ${sug.length
-  ? `<h2>Προτεινόμενες αναλύσεις</h2><div class="minis">${sug.map(mini).join('')}</div>`
+  ? `<h2>Προτεινόμενες επερχόμενες αναλύσεις</h2><div class="minis">${sug.map(mini).join('')}</div>`
   : ''}
 
 <p class="note">Τα προγνωστικά είναι στατιστικές εκτιμήσεις και δεν αποτελούν εγγύηση κέρδους. ${w ? '' : ''}</p>`;
@@ -591,24 +595,33 @@ export function bbNarrative(g) {
   if (!a) return [];
 
   const rec = r => {
+    if (!Array.isArray(r) || !r.length) return 'Δεν υπάρχουν διαθέσιμα πρόσφατα αποτελέσματα.';
     const w = r.filter(x => x.res === 'W').length;
-    return `${w}-${r.length - w} στους τελευταίους ${r.length} αγώνες, μέσος όρος ${(r.reduce((s, x) => s + x.pf, 0) / r.length).toFixed(1)}-${(r.reduce((s, x) => s + x.pa, 0) / r.length).toFixed(1)} πόντοι`;
+    return `${w}-${r.length - w} στους τελευταίους ${r.length} αγώνες, μέσος όρος ${(r.reduce((s, x) => s + Number(x.pf || 0), 0) / r.length).toFixed(1)}-${(r.reduce((s, x) => s + Number(x.pa || 0), 0) / r.length).toFixed(1)} πόντοι`;
   };
 
   const tb = (n, t) =>
-    t ? `${n}: ${t.rank}η θέση, ${t.w}-${t.l}, μέσος όρος πόντων ${(t.pf / t.p).toFixed(1)}-${(t.pa / t.p).toFixed(1)}.` : '';
+    t && Number(t.p) > 0
+      ? `${n}: ${t.rank}η θέση, ${t.w}-${t.l}, μέσος όρος πόντων ${(t.pf / t.p).toFixed(1)}-${(t.pa / t.p).toFixed(1)}.`
+      : '';
+
+  const formHome = a.form?.home || [];
+  const formAway = a.form?.away || [];
 
   const out = [
-    `Φόρμα. ${a.form.home.length ? `${g.home_name}: ${rec(a.form.home)}.` : `${g.home_name}: δεν υπάρχουν διαθέσιμα πρόσφατα αποτελέσματα.`} ${a.form.away.length ? `${g.away_name}: ${rec(a.form.away)}.` : `${g.away_name}: δεν υπάρχουν διαθέσιμα πρόσφατα αποτελέσματα.`}`
+    `Φόρμα. ${formHome.length ? `${g.home_name}: ${rec(formHome)}.` : `${g.home_name}: δεν υπάρχουν διαθέσιμα πρόσφατα αποτελέσματα.`} ${formAway.length ? `${g.away_name}: ${rec(formAway)}.` : `${g.away_name}: δεν υπάρχουν διαθέσιμα πρόσφατα αποτελέσματα.`}`
   ];
 
   out.push(
-    `Βαθμολογία. ${[tb(g.home_name, a.table.home), tb(g.away_name, a.table.away)].filter(Boolean).join(' ') || 'Δεν υπάρχουν διαθέσιμα στοιχεία βαθμολογίας.'}`
+    `Βαθμολογία. ${[tb(g.home_name, a.table?.home), tb(g.away_name, a.table?.away)].filter(Boolean).join(' ') || 'Δεν υπάρχουν διαθέσιμα στοιχεία βαθμολογίας.'}`
   );
 
+  const h2h = a.h2h || {};
+  const h2hList = Array.isArray(h2h.list) ? h2h.list : [];
+
   out.push(
-    a.h2h.list.length
-      ? `Head to Head. Στις τελευταίες ${a.h2h.list.length} μεταξύ τους αναμετρήσεις: νίκες ${g.home_name} ${a.h2h.hw}, νίκες ${g.away_name} ${a.h2h.aw}, μέσο σύνολο ${a.h2h.avg} πόντοι.`
+    h2hList.length
+      ? `Head to Head. Στις τελευταίες ${h2hList.length} μεταξύ τους αναμετρήσεις: νίκες ${g.home_name} ${h2h.hw ?? '—'}, νίκες ${g.away_name} ${h2h.aw ?? '—'}, μέσο σύνολο ${h2h.avg ?? '—'} πόντοι.`
       : 'Head to Head. Δεν υπάρχει ιστορικό αναμετρήσεων στην πηγή δεδομένων.'
   );
 
@@ -616,7 +629,7 @@ export function bbNarrative(g) {
 
   out.push(
     o
-      ? `Αποδόσεις. ${o.home ? `Νίκη ${g.home_name} ${o.home}, νίκη ${g.away_name} ${o.away}.` : ''} ${o.line ? `Όριο πόντων ${o.line} (Over ${o.over}, Under ${o.under}).` : ''} Μέσος όρος από ${o.books} bookmakers.`
+      ? `Αποδόσεις. ${o.home ? `Νίκη ${g.home_name} ${o.home}, νίκη ${g.away_name} ${o.away}.` : ''} ${o.line ? `Όριο πόντων ${o.line} (Over ${o.over}, Under ${o.under}).` : ''} ${o.books != null ? `Μέσος όρος από ${o.books} bookmakers.` : ''}`
       : 'Αποδόσεις. Δεν υπάρχουν διαθέσιμες αποδόσεις από την πηγή.'
   );
 
@@ -624,7 +637,7 @@ export function bbNarrative(g) {
     p?.status === 'locked'
       ? 'Προγνωστικό. Το προγνωστικό αυτού του αγώνα είναι διαθέσιμο σε συνδρομητές Premium μέχρι την έναρξη του αγώνα.'
       : p?.status === 'ok'
-        ? `Προγνωστικό. ${p.label} με εκτιμώμενη πιθανότητα ${p.pct}% και επίπεδο εμπιστοσύνης ${p.confidence.toLowerCase()}.`
+        ? `Προγνωστικό. ${p.label} με εκτιμώμενη πιθανότητα ${p.pct}% και επίπεδο εμπιστοσύνης ${String(p.confidence || 'μέτριο').toLowerCase()}.`
         : `Προγνωστικό. ${p?.note || 'Δεν υπάρχουν επαρκή δεδομένα.'}`
   );
 
@@ -636,23 +649,31 @@ export function bbGamePage(g, res) {
   const name = `${g.home_name} - ${g.away_name}`;
   const r = adaptBb(g);
 
-  const frm = (n, l) =>
-    `<div>
+  const frm = (n, l) => {
+    const list = Array.isArray(l) ? l : [];
+
+    return `<div>
 <h2>Φόρμα: ${e(n)}</h2>
-<div class="form">${l.map(x => `<i class="f${x.res}">${x.res === 'W' ? 'Ν' : 'Η'}</i>`).join('')}</div>
+<div class="form">${list.map(x => `<i class="f${e(x.res)}">${x.res === 'W' ? 'Ν' : 'Η'}</i>`).join('')}</div>
 <ul class="res">
-${l.map(x => `<li><span>${x.date} ${x.home ? 'vs' : '@'} ${e(x.opp)}</span><b class="${x.res}">${x.pf}-${x.pa}</b></li>`).join('') || '<li>Δεν υπάρχουν διαθέσιμα αποτελέσματα.</li>'}
+${list.map(x => `<li><span>${e(x.date || '')} ${x.home ? 'vs' : '@'} ${e(x.opp || '')}</span><b class="${e(x.res || '')}">${e(x.pf)}-${e(x.pa)}</b></li>`).join('') || '<li>Δεν υπάρχουν διαθέσιμα αποτελέσματα.</li>'}
 </ul>
 </div>`;
+  };
 
   const o = a?.odds;
 
   const imp = (x, y) => {
-    const s = 1 / x + 1 / y;
-    return [1 / x / s, 1 / y / s];
+    const n1 = Number(x), n2 = Number(y);
+    if (!Number.isFinite(n1) || !Number.isFinite(n2) || n1 <= 1 || n2 <= 1) return null;
+
+    const s = 1 / n1 + 1 / n2;
+    if (!Number.isFinite(s) || s <= 0) return null;
+
+    return [1 / n1 / s, 1 / n2 / s];
   };
 
-  const pc = x => Math.round(x * 100) + '%';
+  const pc = x => x == null ? '—' : Math.round(x * 100) + '%';
 
   const oddsP = o
     ? `<section class="panel">
@@ -662,17 +683,118 @@ ${l.map(x => `<li><span>${x.date} ${x.home ? 'vs' : '@'} ${e(x.opp)}</span><b cl
 <thead><tr><th>Αγορά</th><th>Μέση απόδοση</th><th>Πιθανότητα αγοράς</th></tr></thead>
 <tbody>
 ${o.home && o.away
-  ? `<tr><td>Νίκη ${e(g.home_name)}</td><td>${o.home}</td><td>${pc(imp(o.home, o.away)[0])}</td></tr>
-<tr><td>Νίκη ${e(g.away_name)}</td><td>${o.away}</td><td>${pc(imp(o.home, o.away)[1])}</td></tr>`
+  ? `<tr><td>Νίκη ${e(g.home_name)}</td><td>${e(o.home)}</td><td>${pc(imp(o.home, o.away)?.[0])}</td></tr>
+<tr><td>Νίκη ${e(g.away_name)}</td><td>${e(o.away)}</td><td>${pc(imp(o.home, o.away)?.[1])}</td></tr>`
   : ''}
-${o.line
-  ? `<tr><td>Over ${o.line} πόντοι</td><td>${o.over}</td><td>${pc(imp(o.over, o.under)[0])}</td></tr>
-<tr><td>Under ${o.line} πόντοι</td><td>${o.under}</td><td>${pc(imp(o.over, o.under)[1])}</td></tr>`
+${o.line && o.over && o.under
+  ? `<tr><td>Over ${e(o.line)} πόντοι</td><td>${e(o.over)}</td><td>${pc(imp(o.over, o.under)?.[0])}</td></tr>
+<tr><td>Under ${e(o.line)} πόντοι</td><td>${e(o.under)}</td><td>${pc(imp(o.over, o.under)?.[1])}</td></tr>`
   : ''}
 </tbody>
 </table>
 </div>
-<p class="note">Μέσος όρος από ${o.books} bookmakers (API-Basketball), μετά την αφαίρεση του περιθωρίου κέρδους. Πληροφοριακά. Οι αποδόσεις αλλάζουν συνεχώς.</p>
+<p class="note">Μέσος όρος από ${e(o.books ?? '—')} bookmakers (API-Basketball), μετά την αφαίρεση του περιθωρίου κέρδους. Πληροφοριακά. Οι αποδόσεις αλλάζουν συνεχώς.</p>
+</section>`
+    : '';
+
+  // Υποστηρίζουμε τόσο τη νέα δομή picks όσο και την παλαιότερη alts.
+  // Δεν εφαρμόζεται κατώτατο όριο 56%: εμφανίζονται όλες οι έγκυρες αγορές.
+  const rawMarkets = Array.isArray(p?.picks) && p.picks.length
+    ? p.picks
+    : Array.isArray(p?.alts)
+      ? p.alts
+      : [];
+
+  const marketRows = [];
+  const seenMarkets = new Set();
+
+  for (const item of rawMarkets) {
+    if (!item || typeof item !== 'object') continue;
+
+    const label = String(
+      item.label ||
+      item.selection ||
+      item.name ||
+      item.market ||
+      ''
+    ).trim();
+
+    let probability = Number(
+      item.pct ?? item.probability ?? item.prob ?? item.confidence
+    );
+
+    if (!label || !Number.isFinite(probability)) continue;
+
+    // Δέχεται πιθανότητες τόσο σε κλίμακα 0-100 όσο και σε δεκαδική 0-1.
+    if (probability > 0 && probability <= 1) probability *= 100;
+
+    if (probability < 0 || probability > 100) continue;
+
+    const key = label.toLocaleLowerCase('el-GR');
+    if (seenMarkets.has(key)) continue;
+
+    seenMarkets.add(key);
+
+    marketRows.push({
+      label,
+      pct: Math.round(probability),
+      market: String(item.market || '').toLowerCase()
+    });
+  }
+
+  const marketCategory = label => {
+    const s = `${label.label} ${label.market}`.toLowerCase();
+
+    if (/winner|νικητ|νίκη|moneyline| νικ|1x2/.test(s)) {
+      return 'Νικητής αγώνα';
+    }
+
+    if (/over|under|πόντ|total|σύνολο|points/.test(s)) {
+      return 'Over / Under πόντων';
+    }
+
+    if (/handicap|χάντικαπ|spread|διαφορά/.test(s)) {
+      return 'Χάντικαπ';
+    }
+
+    if (/quarter|περίοδο|ημίχρονο|half|δεκάλεπτ|quarter/.test(s)) {
+      return 'Αγορές περιόδων';
+    }
+
+    if (/player|παίκτ|ριμπάουντ|ασίστ|πόντοι παίκτη|εύστοχ/.test(s)) {
+      return 'Ειδικές αγορές παικτών';
+    }
+
+    return 'Λοιπές αγορές';
+  };
+
+  const categoryOrder = [
+    'Νικητής αγώνα',
+    'Over / Under πόντων',
+    'Χάντικαπ',
+    'Αγορές περιόδων',
+    'Ειδικές αγορές παικτών',
+    'Λοιπές αγορές'
+  ];
+
+  const marketGroups = categoryOrder
+    .map(category => ({
+      category,
+      items: marketRows.filter(item => marketCategory(item) === category)
+    }))
+    .filter(group => group.items.length);
+
+  const marketsHtml = marketRows.length
+    ? `<section class="panel">
+<h2>Όλες οι αγορές που εξετάστηκαν</h2>
+<p class="note">Παρουσιάζονται όλες οι αγορές για τις οποίες το μοντέλο διαθέτει έγκυρη εκτίμηση πιθανότητας. Η σειρά και τα ποσοστά δεν αποτελούν εγγύηση αποτελέσματος.</p>
+${marketGroups.map(group => `
+<div class="market-group">
+<h3>${e(group.category)}</h3>
+<div class="alts">
+${group.items.map(item => `<span>${e(item.label)} <b>${item.pct}%</b></span>`).join('')}
+</div>
+</div>`).join('')}
 </section>`
     : '';
 
@@ -685,13 +807,12 @@ ${o.line
     : p?.status === 'ok'
       ? `<div class="big"><span class="pl">Επιλογή</span><strong>${e(p.label)}</strong></div>
 <dl>
-<div><dt>Αγορά</dt><dd>${e(p.market)}</dd></div>
-<div><dt>Εκτίμηση πιθανότητας</dt><dd>${p.pct}%</dd></div>
-<div><dt>Επίπεδο εμπιστοσύνης</dt><dd>${e(p.confidence)}</dd></div>
+<div><dt>Αγορά</dt><dd>${e(p.market || '—')}</dd></div>
+<div><dt>Εκτίμηση πιθανότητας</dt><dd>${e(p.pct)}%</dd></div>
+<div><dt>Επίπεδο εμπιστοσύνης</dt><dd>${e(p.confidence || 'Μέτριο')}</dd></div>
 </dl>
 <h3>Αιτιολόγηση</h3>
-<ul class="list">${(p.reasons || []).map(x => `<li>${e(x)}</li>`).join('')}</ul>
-<p class="alts">Αγορές που εξετάστηκαν: ${(p.alts || []).map(x => `<span>${e(x.label)} ${x.pct}%</span>`).join('')}</p>
+<ul class="list">${(Array.isArray(p.reasons) ? p.reasons : []).map(x => `<li>${e(x)}</li>`).join('') || '<li>Δεν υπάρχει πρόσθετη αιτιολόγηση.</li>'}</ul>
 ${resChip(res, r.key)}`
       : `<p>${e(p?.note || 'Δεν υπάρχουν επαρκή δεδομένα για προγνωστικό σε αυτόν τον αγώνα.')}</p>`;
 
@@ -715,14 +836,15 @@ ${a
 ${bbNarrative(g).map(x => `<p>${e(x)}</p>`).join('')}
 <p class="note">Το κείμενο βασίζεται αποκλειστικά στα δεδομένα των ενοτήτων παρακάτω. Τα στατιστικά είναι πραγματικά δεδομένα, το προγνωστικό είναι εκτίμηση.</p>
 </section>
-<section class="panel two">${frm(g.home_name, a.form.home)}${frm(g.away_name, a.form.away)}</section>
+<section class="panel two">${frm(g.home_name, a.form?.home)}${frm(g.away_name, a.form?.away)}</section>
 <section class="panel">
 <h2>Head to Head</h2>
-${a.h2h.list.length
-  ? `<ul class="res">${a.h2h.list.map(x => `<li><span>${x.date} · ${e(x.home)} - ${e(x.away)}</span><b>${x.gh}-${x.ga}</b></li>`).join('')}</ul>`
+${a.h2h?.list?.length
+  ? `<ul class="res">${a.h2h.list.map(x => `<li><span>${e(x.date || '')} · ${e(x.home)} - ${e(x.away)}</span><b>${e(x.gh)}-${e(x.ga)}</b></li>`).join('')}</ul>`
   : '<p class="note">Δεν υπάρχει ιστορικό αναμετρήσεων στην πηγή δεδομένων.</p>'}
 </section>
-${oddsP}`
+${oddsP}
+${marketsHtml}`
   : '<p class="empty">Η πλήρης ανάλυση αυτού του αγώνα δεν έχει δημιουργηθεί ακόμη. Δεν εμφανίζουμε στοιχεία που δεν έχουμε από αξιόπιστη πηγή.</p>'}
 
 <section class="pred">
@@ -731,11 +853,13 @@ ${predBox}
 <p class="note">Η πιθανότητα είναι εκτίμηση απλού στατιστικού μοντέλου. Δεν αποτελεί εγγύηση. 18+, παίξτε υπεύθυνα.</p>
 </section>`;
 
+  const kickoff = toUnix(g.kickoff_ts);
+
   const ld = {
     '@context': 'https://schema.org',
     '@type': 'SportsEvent',
     name,
-    startDate: new Date(g.kickoff_ts * 1000).toISOString(),
+    ...(Number.isFinite(kickoff) ? { startDate: new Date(kickoff * 1000).toISOString() } : {}),
     homeTeam: { '@type': 'SportsTeam', name: g.home_name },
     awayTeam: { '@type': 'SportsTeam', name: g.away_name }
   };
