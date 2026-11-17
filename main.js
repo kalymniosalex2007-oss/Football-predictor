@@ -9,6 +9,7 @@ import { usage } from './api.js';
 import * as supa from './supa.js';
 import {
   loadLedger,
+  settleLedger,
   publicRows,
   premiumPendingCount,
   revealed,
@@ -88,6 +89,16 @@ if (hasBasketballKey) {
     } catch (e) {
       log('basketball-settle', false, e.message);
     }
+  }
+}
+
+// ---------- Αυτόματη ενημέρωση αποτελεσμάτων ledger
+
+if (supa.enabled()) {
+  try {
+    await settleLedger(hasFootballKey);
+  } catch (e) {
+    log('ledger-settle', false, e.message);
   }
 }
 
