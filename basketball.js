@@ -835,15 +835,18 @@ export async function runBasketball() {
   } else {
     const t = now();
 
+    // Ελέγχουμε αγώνες από 30 λεπτά πριν την έναρξη
+    // μέχρι και 6 ώρες μετά την προγραμματισμένη έναρξη.
     const pend = [...bb.games.values()].filter(g =>
       !BB_OVER.includes(g.status) &&
-      g.kickoff_ts < t - 1800 &&
+      g.kickoff_ts < t + 1800 &&
       g.kickoff_ts > t - 6 * 3600
     );
 
+    // Ανανέωση δεδομένων ανά 15 λεπτά.
     if (
       pend.length &&
-      t - (bb.meta.lastRefresh || 0) > 1500
+      t - (bb.meta.lastRefresh || 0) > 900
     ) {
       bb.meta.lastRefresh = t;
 
