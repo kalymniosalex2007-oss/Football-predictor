@@ -361,11 +361,14 @@ export async function refreshLive() {
   const t = now();
   const today = athensDate();
 
+  // Ελέγχουμε αγώνες των τελευταίων 36 ωρών,
+  // ώστε να μη μένουν παλιοί αγώνες χωρίς τελικό σκορ
+  // όταν καθυστερήσει η ενημέρωση από το API.
   const act = list().filter(m =>
     [addDays(today, -1), today].includes(m.match_date) &&
     !FINISHED.includes(m.status) &&
     m.kickoff_ts < t + 5400 &&
-    m.kickoff_ts > t - 4 * 3600
+    m.kickoff_ts > t - 36 * 3600
   );
 
   if (!act.length) return;
